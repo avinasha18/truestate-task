@@ -7,8 +7,8 @@ import csvParser from 'csv-parser';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = path.join(__dirname, '../../data/truestate_assignment_dataset.csv');
 
-// Direct download URL - use raw file hosting (not Google Drive for large files)
-const CSV_URL = process.env.CSV_URL || '';
+// Direct download URL (Dropbox with dl=1 for direct download)
+const CSV_URL = process.env.CSV_URL || 'https://www.dropbox.com/scl/fi/le1ff86kz1ks9tc2x6jhs/truestate_assignment_dataset.csv?rlkey=co19h65iqvkx0062nc5vnqlwq&st=jvqm04ch&dl=1';
 
 let salesData = [];
 let filterOpts = {
