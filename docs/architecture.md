@@ -1,106 +1,167 @@
 # Architecture Document
 
+## Overview
+
+This document explains the technical architecture, design decisions, and data flow of the TruEstate Sales Management System.
+
+## System Architecture
+
+```
+┌─────────────────┐     HTTP      ┌─────────────────┐
+│                 │    Requests   │                 │
+│    Frontend     │ ────────────> │     Backend     │
+│   (React/Vite)  │               │   (Express.js)  │
+│                 │ <──────────── │                 │
+└─────────────────┘     JSON      └─────────────────┘
+                                          │
+                                          │ In-Memory
+                                          ▼
+                                  ┌─────────────────┐
+                                  │   Sales Data    │
+                                  │   (1M Records)  │
+                                  └─────────────────┘
+```
+
 ## Backend Architecture
 
-### Overview
+### Why In-Memory Storage?
 
-The backend is built with Express.js and follows a layered architecture with clear separation of concerns.
+The dataset is loaded into memory at server startup for these reasons:
 
-### CSV Processing Strategy
+1. **Performance**: In-memory filtering is extremely fast (~10-50ms for 1M records)
+2. **Simplicity**: No database setup, configuration, or connection management
+3. **Static Data**: The dataset doesn't change during runtime
+4. **Assignment Requirement**: Instructions specified streaming CSV once at startup
 
-The dataset (~224MB, ~1M records) is loaded once at server startup using a streaming approach:
+Trade-offs:
+- Uses ~500MB RAM for 1M records
+- Data is lost on server restart (reloaded from CSV)
+- Not suitable for datasets that need real-time updates
 
-1. **Streaming Load:** The `csv-parser` library reads the file as a stream, processing one row at a time without loading the entire file into memory at once.
-
-2. **Data Normalization:** During streaming, each row is transformed:
-   - Dates are converted to timestamps for efficient range comparisons
-   - Numeric fields are parsed to integers/floats
-   - A precomputed `searchText` field combines customer name and phone (lowercased) for fast search
-   - Tags are split into arrays
-
-3. **In-Memory Storage:** Processed records are stored in a single array. This approach is acceptable for this assignment because:
-   - The dataset is static (no updates during runtime)
-   - Memory usage is predictable (~500MB for 1M records)
-   - Query response times are extremely fast (no disk I/O per request)
-
-4. **Filter Options Extraction:** Unique values for dropdown filters are collected during the initial load.
-
-### Data Pipeline
-
-All queries follow a strict order (implemented in `salesService.js`):
+### Data Loading Pipeline
 
 ```
-Request → Search → Filter → Sort → Paginate → Response
+CSV File (224MB)
+      │
+      ▼
+Stream with csv-parser (memory efficient)
+      │
+      ▼
+Parse & Normalize Each Row:
+  - Convert dates to timestamps
+  - Parse numeric fields
+  - Create search string (name + phone, lowercase)
+  - Split tags into array
+      │
+      ▼
+Store in Array + Collect Filter Options
+      │
+      ▼
+Ready to Serve Requests
 ```
 
-This ensures:
-- Consistent behavior regardless of parameter combination
-- No duplicate filtering logic
-- Predictable performance characteristics
+### Query Processing Pipeline
+
+All requests follow this exact order:
+
+```
+1. SEARCH    → Filter by customer name or phone (case-insensitive)
+      │
+2. FILTER    → Apply all active filters:
+      │         - Customer Region (multi-select)
+      │         - Gender (multi-select)
+      │         - Age Range (min-max)
+      │         - Product Category (multi-select)
+      │         - Tags (multi-select, match any)
+      │         - Payment Method (multi-select)
+      │         - Date Range (from-to)
+      │
+3. STATS     → Calculate totals from filtered results
+      │
+4. SORT      → Order by date/quantity/customerName
+      │
+5. PAGINATE  → Return 10 records for requested page
+      │
+      ▼
+   Response
+```
+
+This order ensures:
+- Search narrows down results first (most selective)
+- Stats reflect total filtered data, not just current page
+- Pagination happens last on final sorted data
 
 ### Folder Structure
 
 ```
 backend/
 ├── src/
-│   ├── controllers/    # Request handlers (thin layer)
-│   │   └── salesController.js
-│   ├── services/       # Business logic
-│   │   └── salesService.js
-│   ├── utils/          # Utilities
-│   │   └── csvLoader.js
-│   ├── routes/         # Route definitions
-│   │   └── salesRoutes.js
-│   └── index.js        # Entry point
-├── data/               # Dataset
+│   ├── index.js           # Entry point, server setup
+│   ├── controllers/
+│   │   └── salesController.js  # Request handlers
+│   ├── services/
+│   │   └── salesService.js     # Business logic, pipeline
+│   ├── routes/
+│   │   └── salesRoutes.js      # Route definitions
+│   └── utils/
+│       └── csvLoader.js        # CSV loading & parsing
+├── data/
+│   └── *.csv                   # Dataset (gitignored)
 └── package.json
 ```
 
-### API Design
+### Module Responsibilities
 
-- `GET /api/sales` - Main endpoint with query parameters for search, filters, sort, and pagination
-- `GET /api/sales/filters` - Returns available filter options for frontend dropdowns
-
----
+| Module | Purpose |
+|--------|---------|
+| `index.js` | Express setup, middleware, startup sequence |
+| `salesController.js` | Parse query params, call service, send response |
+| `salesService.js` | Data pipeline logic (search, filter, sort, paginate) |
+| `csvLoader.js` | Stream CSV, normalize data, manage in-memory store |
 
 ## Frontend Architecture
 
-### Overview
-
-React application using custom hooks for state management and functional components for UI.
-
 ### State Management
 
-The `useSalesData` hook centralizes all data-related state:
+Using a custom hook (`useSalesData`) instead of external state library:
 
-- **Query State:** search term, filter values, sort options, current page
-- **Data State:** transaction records, pagination info, loading/error status
-- **Filter Options:** available values for filter dropdowns
+- Simpler for this scope
+- All related state in one place
+- Easy to understand data flow
 
-State updates are debounced (300ms) to prevent excessive API calls during typing.
+### Component Structure
 
-### Component Responsibilities
-
-| Component | Responsibility |
-|-----------|----------------|
-| SearchBar | Text input for customer name/phone search |
-| FilterPanel | Multi-select and range inputs for all filter types |
-| SortDropdown | Dropdown to select sort field and order |
-| TransactionTable | Display records in table format |
-| Pagination | Previous/Next navigation with page info |
+```
+App
+├── Sidebar (navigation UI)
+├── Header
+│   └── SearchBar
+├── FilterBar (dropdown filters)
+├── SortDropdown
+├── StatsCards
+├── TransactionTable
+└── Pagination
+```
 
 ### Data Flow
 
 ```
-User Action
-    ↓
-Component calls hook method (updateSearch, updateFilters, etc.)
-    ↓
-Hook updates state and triggers API call
-    ↓
-API response updates data state
-    ↓
-Components re-render with new data
+User Action (search/filter/sort/page)
+        │
+        ▼
+useSalesData hook updates state
+        │
+        ▼
+useEffect triggers (debounced 300ms)
+        │
+        ▼
+API call to backend
+        │
+        ▼
+Update data/pagination/stats state
+        │
+        ▼
+Components re-render
 ```
 
 ### Folder Structure
@@ -108,47 +169,89 @@ Components re-render with new data
 ```
 frontend/
 ├── src/
-│   ├── components/     # UI components
-│   ├── hooks/          # Custom React hooks
-│   ├── services/       # API layer
-│   ├── utils/          # Helper functions
-│   └── App.jsx         # Main component
-├── public/
+│   ├── App.jsx            # Main component
+│   ├── components/        # UI components
+│   ├── hooks/
+│   │   └── useSalesData.js    # State management
+│   ├── services/
+│   │   └── api.js             # API calls
+│   └── utils/
+│       └── formatters.js      # Display formatting
 └── package.json
 ```
 
----
+## API Design
 
-## Module Responsibilities
+### GET /api/sales
 
-### Backend Modules
+Returns paginated transactions with optional filtering.
 
-| Module | Responsibility |
-|--------|----------------|
-| csvLoader.js | Stream CSV, normalize data, store in memory |
-| salesService.js | Apply search, filter, sort, paginate pipeline |
-| salesController.js | Parse request params, call service, send response |
-| salesRoutes.js | Define route mappings |
-| index.js | Initialize Express, load CSV, start server |
+**Query Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| search | string | Search in name/phone |
+| customerRegion | string | Comma-separated values |
+| gender | string | Comma-separated values |
+| ageMin, ageMax | number | Age range |
+| productCategory | string | Comma-separated values |
+| tags | string | Comma-separated values |
+| paymentMethod | string | Comma-separated values |
+| dateFrom, dateTo | string | Date range (YYYY-MM-DD) |
+| sortBy | string | date, quantity, customerName |
+| sortOrder | string | asc, desc |
+| page | number | Page number (1-indexed) |
 
-### Frontend Modules
+**Response:**
+```json
+{
+  "data": [...],
+  "pagination": {
+    "total": 50000,
+    "page": 1,
+    "totalPages": 5000,
+    "pageSize": 10
+  },
+  "stats": {
+    "totalUnits": 150000,
+    "totalAmount": 5000000,
+    "totalDiscount": 250000
+  }
+}
+```
 
-| Module | Responsibility |
-|--------|----------------|
-| api.js | Build query strings, make fetch calls |
-| useSalesData.js | Manage all query state, debounce API calls |
-| formatters.js | Format currency and dates for display |
-| Components | Render UI elements |
+### GET /api/sales/filters
 
----
+Returns available filter options.
+
+```json
+{
+  "customerRegions": ["Central", "East", "North", "South", "West"],
+  "genders": ["Female", "Male"],
+  "productCategories": ["Beauty", "Clothing", "Electronics"],
+  "tags": ["accessories", "beauty", ...],
+  "paymentMethods": ["Cash", "Credit Card", ...]
+}
+```
+
+## Edge Cases Handled
+
+1. **Empty search results**: Returns empty array with pagination showing 0 total
+2. **Invalid age range**: Filters with invalid numbers are ignored
+3. **Invalid dates**: Date filters with invalid format are ignored
+4. **Missing fields in data**: Default to empty string or 0
+5. **Page out of range**: Clamped to valid range (1 to totalPages)
+6. **Invalid sort field**: Falls back to 'date'
 
 ## Performance Considerations
 
-1. **Startup Time:** CSV loading takes 5-10 seconds. Server only accepts requests after loading completes.
+1. **Debouncing**: Frontend waits 300ms before API call to avoid excessive requests
+2. **Single pass filtering**: All filters applied in one iteration
+3. **Pre-computed search field**: Combined name+phone string for faster search
+4. **Timestamps for dates**: Numeric comparison faster than string parsing
 
-2. **Query Time:** In-memory filtering is fast (<100ms for most queries). Complex filter combinations may take longer.
+## Deployment
 
-3. **Memory Usage:** The processed dataset uses approximately 500MB of RAM. This is acceptable for a single-instance deployment.
+- **Frontend**: Vercel (static hosting)
+- **Backend**: Render/Railway (persistent Node.js server)
 
-4. **Frontend Debouncing:** 300ms debounce on search/filter changes prevents unnecessary API calls.
-
+Backend needs persistent server (not serverless) to maintain data in memory.
