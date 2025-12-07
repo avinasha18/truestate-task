@@ -76,11 +76,11 @@ export function getDB() {
 }
 
 export function getFilterOptions() {
-  const regions = db.prepare('SELECT DISTINCT customerRegion FROM sales WHERE customerRegion != "" ORDER BY customerRegion').all();
-  const genders = db.prepare('SELECT DISTINCT gender FROM sales WHERE gender != "" ORDER BY gender').all();
-  const categories = db.prepare('SELECT DISTINCT productCategory FROM sales WHERE productCategory != "" ORDER BY productCategory').all();
-  const payments = db.prepare('SELECT DISTINCT paymentMethod FROM sales WHERE paymentMethod != "" ORDER BY paymentMethod').all();
-  const tagsRaw = db.prepare('SELECT DISTINCT tags FROM sales WHERE tags != ""').all();
+  const regions = db.prepare("SELECT DISTINCT customerRegion FROM sales WHERE customerRegion IS NOT NULL AND customerRegion != '' ORDER BY customerRegion").all();
+  const genders = db.prepare("SELECT DISTINCT gender FROM sales WHERE gender IS NOT NULL AND gender != '' ORDER BY gender").all();
+  const categories = db.prepare("SELECT DISTINCT productCategory FROM sales WHERE productCategory IS NOT NULL AND productCategory != '' ORDER BY productCategory").all();
+  const payments = db.prepare("SELECT DISTINCT paymentMethod FROM sales WHERE paymentMethod IS NOT NULL AND paymentMethod != '' ORDER BY paymentMethod").all();
+  const tagsRaw = db.prepare("SELECT DISTINCT tags FROM sales WHERE tags IS NOT NULL AND tags != ''").all();
   
   const tagSet = new Set();
   tagsRaw.forEach(row => {
