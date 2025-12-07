@@ -7,8 +7,8 @@ import Database from 'better-sqlite3';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, '../../data/sales.db');
 
-// Set this after uploading .db to Dropbox (change dl=0 to dl=1)
-const DB_URL = process.env.DB_URL || '';
+// Dropbox direct download URL
+const DB_URL = process.env.DB_URL || 'https://www.dropbox.com/scl/fi/4pfzkow4u3s9mt9vakz6o/sales.db?rlkey=9earui04vksw5mcfbzmy7xsy8&st=g2onb796&dl=1';
 
 let db = null;
 
