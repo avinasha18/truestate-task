@@ -1,15 +1,14 @@
 import fs from 'fs';
 import path from 'path';
+import https from 'https';
 import { fileURLToPath } from 'url';
 import csvParser from 'csv-parser';
-import https from 'https';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = path.join(__dirname, '../../data/truestate_assignment_dataset.csv');
 
-// Google Drive direct download URL
-const DRIVE_FILE_ID = process.env.DRIVE_FILE_ID || '1tzbyuxBmrBwMSXbL22r33FUMtO0V_lxb';
-const DOWNLOAD_URL = `https://drive.google.com/uc?export=download&confirm=yes&id=${DRIVE_FILE_ID}`;
+// Direct download URL - use raw file hosting (not Google Drive for large files)
+const CSV_URL = process.env.CSV_URL || '';
 
 let salesData = [];
 let filterOpts = {
@@ -73,40 +72,33 @@ function addToFilterOpts(rec) {
   });
 }
 
-function downloadCSV() {
+function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
-    console.log('CSV not found locally. Downloading from Google Drive...');
-    
-    const dataDir = path.dirname(CSV_PATH);
+    const dataDir = path.dirname(dest);
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
 
-    const file = fs.createWriteStream(CSV_PATH);
+    const file = fs.createWriteStream(dest);
     
-    https.get(DOWNLOAD_URL, (response) => {
-      // Handle redirect
-      if (response.statusCode === 302 || response.statusCode === 301) {
-        https.get(response.headers.location, (res) => {
-          res.pipe(file);
-          file.on('finish', () => {
-            file.close();
-            console.log('Download complete!');
-            resolve();
-          });
-        }).on('error', reject);
-      } else {
-        response.pipe(file);
+    const request = (url) => {
+      https.get(url, (res) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          request(res.headers.location);
+          return;
+        }
+        res.pipe(file);
         file.on('finish', () => {
           file.close();
-          console.log('Download complete!');
           resolve();
         });
-      }
-    }).on('error', (err) => {
-      fs.unlink(CSV_PATH, () => {});
-      reject(err);
-    });
+      }).on('error', (err) => {
+        fs.unlink(dest, () => {});
+        reject(err);
+      });
+    };
+    
+    request(url);
   });
 }
 
@@ -139,13 +131,21 @@ function processCSV() {
 }
 
 export async function loadCSV() {
-  // Check if CSV exists, download if not
   if (!fs.existsSync(CSV_PATH)) {
-    try {
-      await downloadCSV();
-    } catch (err) {
-      console.error('Failed to download CSV:', err.message);
-      console.log('Please download the CSV manually and place it in backend/data/');
+    if (CSV_URL) {
+      console.log('CSV not found. Downloading...');
+      try {
+        await downloadFile(CSV_URL, CSV_PATH);
+        console.log('Download complete!');
+      } catch (err) {
+        console.error('Download failed:', err.message);
+        throw new Error('CSV download failed. Please set CSV_URL environment variable to a direct download link.');
+      }
+    } else {
+      console.error('CSV file not found at:', CSV_PATH);
+      console.error('Please either:');
+      console.error('1. Place the CSV file in backend/data/');
+      console.error('2. Set CSV_URL environment variable to a direct download link');
       throw new Error('CSV file not available');
     }
   }
