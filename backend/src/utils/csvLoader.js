@@ -7,8 +7,8 @@ import https from 'https';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CSV_PATH = path.join(__dirname, '../../data/truestate_assignment_dataset.csv');
 
-// Google Drive direct download URL - set FILE_ID in env or replace here
-const DRIVE_FILE_ID = process.env.DRIVE_FILE_ID || '1a2b3c4d5e6f'; // Replace with actual ID
+// Google Drive direct download URL
+const DRIVE_FILE_ID = process.env.DRIVE_FILE_ID || '1tzbyuxBmrBwMSXbL22r33FUMtO0V_lxb';
 const DOWNLOAD_URL = `https://drive.google.com/uc?export=download&confirm=yes&id=${DRIVE_FILE_ID}`;
 
 let salesData = [];
