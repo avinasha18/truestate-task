@@ -1,4 +1,4 @@
-import { getData, getFilterOpts } from '../utils/csvLoader.js';
+import { getDB, getFilterOptions as getOpts } from '../utils/database.js';
 
 const PAGE_SIZE = 10;
 
@@ -19,77 +19,102 @@ export function queryTransactions(params) {
     page = 1
   } = params;
 
-  let results = getData();
+  const db = getDB();
+  const conditions = [];
+  const sqlParams = {};
 
-  // Search - case insensitive partial match
+  // Search
   if (search && search.trim()) {
-    const q = search.toLowerCase().trim();
-    results = results.filter(r => r.searchStr.includes(q));
+    conditions.push("searchStr LIKE @search");
+    sqlParams.search = `%${search.toLowerCase().trim()}%`;
   }
 
   // Multi-select filters
   if (customerRegion.length > 0) {
-    results = results.filter(r => customerRegion.includes(r.customerRegion));
+    conditions.push(`customerRegion IN (${customerRegion.map((_, i) => `@region${i}`).join(', ')})`);
+    customerRegion.forEach((v, i) => sqlParams[`region${i}`] = v);
   }
   if (gender.length > 0) {
-    results = results.filter(r => gender.includes(r.gender));
+    conditions.push(`gender IN (${gender.map((_, i) => `@gender${i}`).join(', ')})`);
+    gender.forEach((v, i) => sqlParams[`gender${i}`] = v);
   }
   if (productCategory.length > 0) {
-    results = results.filter(r => productCategory.includes(r.productCategory));
-  }
-  if (tags.length > 0) {
-    results = results.filter(r => r.tags.some(t => tags.includes(t)));
+    conditions.push(`productCategory IN (${productCategory.map((_, i) => `@cat${i}`).join(', ')})`);
+    productCategory.forEach((v, i) => sqlParams[`cat${i}`] = v);
   }
   if (paymentMethod.length > 0) {
-    results = results.filter(r => paymentMethod.includes(r.paymentMethod));
+    conditions.push(`paymentMethod IN (${paymentMethod.map((_, i) => `@pay${i}`).join(', ')})`);
+    paymentMethod.forEach((v, i) => sqlParams[`pay${i}`] = v);
+  }
+  if (tags.length > 0) {
+    const tagConditions = tags.map((_, i) => `tags LIKE @tag${i}`);
+    conditions.push(`(${tagConditions.join(' OR ')})`);
+    tags.forEach((v, i) => sqlParams[`tag${i}`] = `%${v}%`);
   }
 
-  // Range filters - validate min <= max
+  // Range filters
   if (ageMin !== undefined && !isNaN(ageMin)) {
-    results = results.filter(r => r.age >= ageMin);
+    conditions.push("age >= @ageMin");
+    sqlParams.ageMin = ageMin;
   }
   if (ageMax !== undefined && !isNaN(ageMax)) {
-    results = results.filter(r => r.age <= ageMax);
+    conditions.push("age <= @ageMax");
+    sqlParams.ageMax = ageMax;
   }
   if (dateFrom) {
     const fromTs = new Date(dateFrom).getTime();
     if (!isNaN(fromTs)) {
-      results = results.filter(r => r.dateTs >= fromTs);
+      conditions.push("dateTs >= @dateFrom");
+      sqlParams.dateFrom = fromTs;
     }
   }
   if (dateTo) {
     const toTs = new Date(dateTo).getTime();
     if (!isNaN(toTs)) {
-      results = results.filter(r => r.dateTs <= toTs);
+      conditions.push("dateTs <= @dateTo");
+      sqlParams.dateTo = toTs;
     }
   }
 
-  // Stats before pagination
-  const stats = {
-    totalUnits: results.reduce((sum, r) => sum + r.quantity, 0),
-    totalAmount: results.reduce((sum, r) => sum + r.totalAmount, 0),
-    totalDiscount: results.reduce((sum, r) => sum + (r.totalAmount - r.finalAmount), 0)
-  };
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
   // Sort
-  const validSortFields = ['date', 'quantity', 'customerName'];
-  const sortField = validSortFields.includes(sortBy) ? sortBy : 'date';
-  const sortDir = sortOrder === 'asc' ? 1 : -1;
-  
-  const sorted = [...results];
-  sorted.sort((a, b) => {
-    if (sortField === 'date') return (a.dateTs - b.dateTs) * sortDir;
-    if (sortField === 'quantity') return (a.quantity - b.quantity) * sortDir;
-    if (sortField === 'customerName') return a.customerName.localeCompare(b.customerName) * sortDir;
-    return 0;
-  });
+  const validSorts = { date: 'dateTs', quantity: 'quantity', customerName: 'customerName' };
+  const sortCol = validSorts[sortBy] || 'dateTs';
+  const sortDir = sortOrder === 'asc' ? 'ASC' : 'DESC';
 
-  // Paginate
-  const total = sorted.length;
+  // Get total count and stats
+  const countSql = `SELECT COUNT(*) as total, SUM(quantity) as units, SUM(totalAmount) as amount, SUM(totalAmount - finalAmount) as discount FROM sales ${whereClause}`;
+  const statsResult = db.prepare(countSql).get(sqlParams);
+  
+  const total = statsResult.total;
+  const stats = {
+    totalUnits: statsResult.units || 0,
+    totalAmount: statsResult.amount || 0,
+    totalDiscount: statsResult.discount || 0
+  };
+
+  // Pagination
   const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
   const currentPage = Math.min(Math.max(1, parseInt(page) || 1), totalPages);
-  const start = (currentPage - 1) * PAGE_SIZE;
-  const data = sorted.slice(start, start + PAGE_SIZE);
+  const offset = (currentPage - 1) * PAGE_SIZE;
+
+  // Get data
+  const dataSql = `
+    SELECT transactionId, date, customerId, customerName, phone, gender, age,
+           customerRegion, productId, productName, brand, productCategory, tags,
+           quantity, totalAmount, finalAmount, paymentMethod, orderStatus, employeeName
+    FROM sales ${whereClause}
+    ORDER BY ${sortCol} ${sortDir}
+    LIMIT @limit OFFSET @offset
+  `;
+  
+  const data = db.prepare(dataSql).all({ ...sqlParams, limit: PAGE_SIZE, offset });
+
+  // Parse tags back to array
+  data.forEach(row => {
+    row.tags = row.tags ? row.tags.split(',').map(t => t.trim()) : [];
+  });
 
   return {
     data,
@@ -99,5 +124,5 @@ export function queryTransactions(params) {
 }
 
 export function getFilterOptions() {
-  return getFilterOpts();
+  return getOpts();
 }
