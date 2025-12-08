@@ -1,257 +1,121 @@
 # Architecture Document
 
-## Overview
+## System Overview
 
-This document explains the technical architecture, design decisions, and data flow of the TruEstate Sales Management System.
-
-## System Architecture
+The system has two parts: a React frontend hosted on Vercel and an Express backend hosted on Render. The backend uses SQLite to store and query 1 million sales records efficiently.
 
 ```
-┌─────────────────┐     HTTP      ┌─────────────────┐
-│                 │    Requests   │                 │
-│    Frontend     │ ────────────> │     Backend     │
-│   (React/Vite)  │               │   (Express.js)  │
-│                 │ <──────────── │                 │
-└─────────────────┘     JSON      └─────────────────┘
-                                          │
-                                          │ In-Memory
-                                          ▼
-                                  ┌─────────────────┐
-                                  │   Sales Data    │
-                                  │   (1M Records)  │
-                                  └─────────────────┘
+Frontend (Vercel)  <--HTTP-->  Backend (Render)  <--SQL-->  SQLite DB
 ```
 
-## Backend Architecture
+## Why SQLite?
 
-### Why In-Memory Storage?
+Started with in-memory storage but hit deployment issues - loading 1M records needs 500MB+ RAM which exceeds free tier limits. Switched to SQLite because:
 
-The dataset is loaded into memory at server startup for these reasons:
+- Queries only fetch what's needed (10 rows per page)
+- Memory usage stays low (~20MB)
+- Database file can be hosted externally and downloaded once
+- Works on any free hosting tier
 
-1. **Performance**: In-memory filtering is extremely fast (~10-50ms for 1M records)
-2. **Simplicity**: No database setup, configuration, or connection management
-3. **Static Data**: The dataset doesn't change during runtime
-4. **Assignment Requirement**: Instructions specified streaming CSV once at startup
-
-Trade-offs:
-- Uses ~500MB RAM for 1M records
-- Data is lost on server restart (reloaded from CSV)
-- Not suitable for datasets that need real-time updates
-
-### Data Loading Pipeline
-
-```
-CSV File (224MB)
-      │
-      ▼
-Stream with csv-parser (memory efficient)
-      │
-      ▼
-Parse & Normalize Each Row:
-  - Convert dates to timestamps
-  - Parse numeric fields
-  - Create search string (name + phone, lowercase)
-  - Split tags into array
-      │
-      ▼
-Store in Array + Collect Filter Options
-      │
-      ▼
-Ready to Serve Requests
-```
-
-### Query Processing Pipeline
-
-All requests follow this exact order:
-
-```
-1. SEARCH    → Filter by customer name or phone (case-insensitive)
-      │
-2. FILTER    → Apply all active filters:
-      │         - Customer Region (multi-select)
-      │         - Gender (multi-select)
-      │         - Age Range (min-max)
-      │         - Product Category (multi-select)
-      │         - Tags (multi-select, match any)
-      │         - Payment Method (multi-select)
-      │         - Date Range (from-to)
-      │
-3. STATS     → Calculate totals from filtered results
-      │
-4. SORT      → Order by date/quantity/customerName
-      │
-5. PAGINATE  → Return 10 records for requested page
-      │
-      ▼
-   Response
-```
-
-This order ensures:
-- Search narrows down results first (most selective)
-- Stats reflect total filtered data, not just current page
-- Pagination happens last on final sorted data
-
-### Folder Structure
+## Backend Structure
 
 ```
 backend/
 ├── src/
-│   ├── index.js           # Entry point, server setup
+│   ├── index.js              # Express server setup
 │   ├── controllers/
-│   │   └── salesController.js  # Request handlers
+│   │   └── salesController.js    # Handle HTTP requests
 │   ├── services/
-│   │   └── salesService.js     # Business logic, pipeline
+│   │   └── salesService.js       # Build SQL queries
 │   ├── routes/
-│   │   └── salesRoutes.js      # Route definitions
+│   │   └── salesRoutes.js        # Route definitions
 │   └── utils/
-│       └── csvLoader.js        # CSV loading & parsing
-├── data/
-│   └── *.csv                   # Dataset (gitignored)
-└── package.json
+│       └── database.js           # SQLite connection
+├── scripts/
+│   └── importCsv.js              # One-time CSV to SQLite import
+└── data/
+    └── sales.db                  # SQLite database (gitignored)
 ```
 
-### Module Responsibilities
+## Data Flow
 
-| Module | Purpose |
-|--------|---------|
-| `index.js` | Express setup, middleware, startup sequence |
-| `salesController.js` | Parse query params, call service, send response |
-| `salesService.js` | Data pipeline logic (search, filter, sort, paginate) |
-| `csvLoader.js` | Stream CSV, normalize data, manage in-memory store |
+1. User types in search or clicks a filter
+2. Frontend debounces for 300ms then calls API
+3. Backend builds SQL query with all params
+4. SQLite runs query with indexes
+5. Backend returns 10 rows + pagination info + stats
+6. Frontend updates the table
 
-## Frontend Architecture
+## Query Pipeline
 
-### State Management
+All requests go through this order:
 
-Using a custom hook (`useSalesData`) instead of external state library:
+1. **Search** - WHERE searchStr LIKE '%query%'
+2. **Filters** - AND clauses for each active filter
+3. **Stats** - COUNT, SUM aggregates on filtered data
+4. **Sort** - ORDER BY selected column
+5. **Paginate** - LIMIT 10 OFFSET (page-1)*10
 
-- Simpler for this scope
-- All related state in one place
-- Easy to understand data flow
-
-### Component Structure
-
-```
-App
-├── Sidebar (navigation UI)
-├── Header
-│   └── SearchBar
-├── FilterBar (dropdown filters)
-├── SortDropdown
-├── StatsCards
-├── TransactionTable
-└── Pagination
-```
-
-### Data Flow
+## Frontend Structure
 
 ```
-User Action (search/filter/sort/page)
-        │
-        ▼
-useSalesData hook updates state
-        │
-        ▼
-useEffect triggers (debounced 300ms)
-        │
-        ▼
-API call to backend
-        │
-        ▼
-Update data/pagination/stats state
-        │
-        ▼
-Components re-render
+frontend/src/
+├── App.jsx                 # Main layout
+├── components/
+│   ├── SearchBar.jsx       # Search input
+│   ├── FilterBar.jsx       # Dropdown filters
+│   ├── SortDropdown.jsx    # Sort selector
+│   ├── StatsCards.jsx      # Summary numbers
+│   ├── TransactionTable.jsx    # Data table
+│   └── Pagination.jsx      # Page navigation
+├── hooks/
+│   └── useSalesData.js     # All state + API calls
+└── services/
+    └── api.js              # Fetch wrapper
 ```
 
-### Folder Structure
+## State Management
 
-```
-frontend/
-├── src/
-│   ├── App.jsx            # Main component
-│   ├── components/        # UI components
-│   ├── hooks/
-│   │   └── useSalesData.js    # State management
-│   ├── services/
-│   │   └── api.js             # API calls
-│   └── utils/
-│       └── formatters.js      # Display formatting
-└── package.json
-```
+Using a custom hook instead of Redux or Zustand. The hook manages:
 
-## API Design
+- Search term
+- Filter selections
+- Sort field and direction
+- Current page
+- Loading and error states
+- Data from API
 
-### GET /api/sales
+When any param changes, useEffect fires and calls the API.
 
-Returns paginated transactions with optional filtering.
+## API Endpoints
 
-**Query Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| search | string | Search in name/phone |
-| customerRegion | string | Comma-separated values |
-| gender | string | Comma-separated values |
-| ageMin, ageMax | number | Age range |
-| productCategory | string | Comma-separated values |
-| tags | string | Comma-separated values |
-| paymentMethod | string | Comma-separated values |
-| dateFrom, dateTo | string | Date range (YYYY-MM-DD) |
-| sortBy | string | date, quantity, customerName |
-| sortOrder | string | asc, desc |
-| page | number | Page number (1-indexed) |
+**GET /api/sales**
 
-**Response:**
-```json
-{
-  "data": [...],
-  "pagination": {
-    "total": 50000,
-    "page": 1,
-    "totalPages": 5000,
-    "pageSize": 10
-  },
-  "stats": {
-    "totalUnits": 150000,
-    "totalAmount": 5000000,
-    "totalDiscount": 250000
-  }
-}
-```
+Query params: search, customerRegion, gender, ageMin, ageMax, productCategory, tags, paymentMethod, dateFrom, dateTo, sortBy, sortOrder, page
 
-### GET /api/sales/filters
+Returns: { data: [], pagination: {}, stats: {} }
 
-Returns available filter options.
+**GET /api/sales/filters**
 
-```json
-{
-  "customerRegions": ["Central", "East", "North", "South", "West"],
-  "genders": ["Female", "Male"],
-  "productCategories": ["Beauty", "Clothing", "Electronics"],
-  "tags": ["accessories", "beauty", ...],
-  "paymentMethods": ["Cash", "Credit Card", ...]
-}
-```
+Returns available options for each filter dropdown.
 
-## Edge Cases Handled
+## Database Schema
 
-1. **Empty search results**: Returns empty array with pagination showing 0 total
-2. **Invalid age range**: Filters with invalid numbers are ignored
-3. **Invalid dates**: Date filters with invalid format are ignored
-4. **Missing fields in data**: Default to empty string or 0
-5. **Page out of range**: Clamped to valid range (1 to totalPages)
-6. **Invalid sort field**: Falls back to 'date'
+Single table with indexes on commonly filtered columns:
 
-## Performance Considerations
+- searchStr (for text search)
+- customerRegion, gender, productCategory, paymentMethod (for filters)
+- dateTs, age (for range queries)
 
-1. **Debouncing**: Frontend waits 300ms before API call to avoid excessive requests
-2. **Single pass filtering**: All filters applied in one iteration
-3. **Pre-computed search field**: Combined name+phone string for faster search
-4. **Timestamps for dates**: Numeric comparison faster than string parsing
+## Edge Cases
+
+- Empty results: Shows "No transactions found" message
+- Invalid filters: Ignored, query still runs
+- Network error: Shows error state with retry option
+- Page out of range: Clamped to valid range
 
 ## Deployment
 
-- **Frontend**: Vercel (static hosting)
-- **Backend**: Render/Railway (persistent Node.js server)
-
-Backend needs persistent server (not serverless) to maintain data in memory.
+- Frontend on Vercel - just connects to GitHub and deploys
+- Backend on Render - downloads SQLite DB from Dropbox on first start
+- DB file too large for GitHub so it's hosted on Dropbox with direct download link

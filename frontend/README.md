@@ -1,6 +1,6 @@
-# TruEstate Frontend
+# Frontend
 
-React + Vite + Tailwind application for the Sales Management System.
+React app built with Vite and Tailwind.
 
 ## Setup
 
@@ -9,11 +9,31 @@ npm install
 npm run dev
 ```
 
-The frontend runs on port 5173 by default and connects to the backend API at port 3001.
+Opens on port 5173.
+
+## Build
+
+```bash
+npm run build
+```
+
+Output goes to `dist/` folder.
+
+## Environment
+
+Set `VITE_API_URL` to point to your backend:
+
+```
+VITE_API_URL=https://your-backend.onrender.com/api
+```
 
 ## Structure
 
-- `src/components/` - UI components (SearchBar, FilterPanel, etc.)
-- `src/hooks/` - Custom React hooks (useSalesData)
-- `src/services/` - API communication layer
-- `src/utils/` - Helper functions (formatters)
+```
+src/
+├── App.jsx            # Main component
+├── components/        # UI pieces
+├── hooks/             # useSalesData hook
+├── services/          # API calls
+└── utils/             # Formatters
+```
